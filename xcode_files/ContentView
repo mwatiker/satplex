@@ -1,0 +1,97 @@
+import SwiftUI
+import WebKit
+
+final class SatplexWebViewController: UIViewController {
+
+    let webView: WKWebView = {
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.scrollView.isScrollEnabled = false
+        wv.scrollView.bounces = false
+        wv.scrollView.contentInsetAdjustmentBehavior = .never
+        wv.backgroundColor = .black
+        wv.scrollView.backgroundColor = .black
+        wv.isOpaque = false
+        return wv
+    }()
+
+    override var prefersStatusBarHidden: Bool { true }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        webView.frame = view.bounds
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(webView)
+        webView.load(URLRequest(url: URL(string: "https://satplex.io/")!))
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+
+        // Add a native black overlay synchronously — before any async JS —
+        // so not a single frame of the rotation animation is ever visible.
+        let overlay = UIView(frame: view.bounds)
+        overlay.backgroundColor = .black
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(overlay)
+
+        // Also gate React's resize handler during the animation.
+        webView.evaluateJavaScript("""
+            window.__satplexRotating = true;
+            window.dispatchEvent(new CustomEvent('satplexrotationstart'));
+        """, completionHandler: nil)
+
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self = self else { return }
+            let w = Int(size.width)
+            let h = Int(size.height)
+            let isLandscape = size.width > size.height
+
+            let js = """
+            (function() {
+                var root = document.documentElement;
+                root.style.setProperty('--app-width',  '\(w)px');
+                root.style.setProperty('--app-height', '\(h)px');
+                window.__satplexIsLandscape = \(isLandscape ? "true" : "false");
+                window.__satplexRotating = false;
+                window.dispatchEvent(new CustomEvent('satplexrotationend'));
+                setTimeout(function() {
+                    window.dispatchEvent(new Event('resize'));
+                }, 50);
+            })();
+            """
+            // Once the JS has run and React + the globe have started updating,
+            // fade the native overlay out so the reveal feels smooth.
+            self.webView.evaluateJavaScript(js) { _, _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    UIView.animate(withDuration: 0.25, animations: {
+                        overlay.alpha = 0
+                    }, completion: { _ in
+                        overlay.removeFromSuperview()
+                    })
+                }
+            }
+        }
+    }
+}
+
+struct WebView: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> SatplexWebViewController {
+        SatplexWebViewController()
+    }
+    func updateUIViewController(_ vc: SatplexWebViewController, context: Context) {}
+}
+
+struct ContentView: View {
+    var body: some View {
+        WebView()
+            .ignoresSafeArea()
+            .statusBarHidden(true)
+    }
+}
+
+#Preview {
+    ContentView()
+}
